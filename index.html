@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>JJK: Cursed Technique</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Noto+Serif+JP:wght@700&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', sans-serif; }
+
+        #ui {
+            position: absolute;
+            top: 8%;
+            width: 100%;
+            text-align: center;
+            color: #fff;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        h1 {
+            font-family: 'Noto Serif JP', serif;
+            font-size: 2.8rem;
+            margin: 0;
+            letter-spacing: 8px;
+            font-weight: 700;
+            background: linear-gradient(to bottom, #fff, #666);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #technique-name {
+            font-family: 'Cinzel Decorative', serif;
+            font-size: 1rem;
+            color: #00ffff;
+            margin-top: 14px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            text-shadow: 0 0 12px rgba(0, 255, 255, 0.6);
+            transition: color 0.6s ease, text-shadow 0.6s ease;
+        }
+
+        #video-container {
+            position: absolute;
+            bottom: 2%;
+            left: 18%;
+            transform: translateX(-50%) scaleX(-1);
+            width: 85vw;
+            max-width: 450px;
+            height: 42vh;
+            border: 1.5px solid rgba(255, 255, 255, 0.15);
+            z-index: 20;
+            background-color: #000;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(0,0,0,0.95);
+        }
+
+        video { width: 100%; height: 100%; object-fit: cover; opacity: 0.75; }
+        #output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        #grain {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 5; opacity: 0.5;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.06'/%3E%3C/svg%3E");
+        }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="grain"></div>
+
+<div id="ui">
+    <h1>呪術廻戦</h1>
+    <div id="technique-name">Cursed Energy</div>
+</div>
+
+<div id="video-container">
+    <video class="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+</div>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+    // --- Scene ---
+    const scene = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
+    cam.position.z = 55;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, cam));
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 1.5, 0.4, 0.85);
+    composer.addPass(bloom);
+
+    // --- Particles (reduced count for smoother FPS) ---
+    const COUNT = 12000;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(COUNT * 3);
+    const col = new Float32Array(COUNT * 3);
+    const siz = new Float32Array(COUNT);
+    const tPos = new Float32Array(COUNT * 3);
+    const tCol = new Float32Array(COUNT * 3);
+    const tSiz = new Float32Array(COUNT);
+
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('size',     new THREE.BufferAttribute(siz, 1));
+
+    const mat = new THREE.PointsMaterial({
+        size: 0.32, vertexColors: true,
+        blending: THREE.AdditiveBlending, transparent: true, depthWrite: false
+    });
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+
+    // --- Technique generators ---
+    const TAU = Math.PI * 2;
+
+    function getRed(i) {
+        if (i < COUNT * 0.1) {
+            const r = Math.random() * 9, t = Math.random() * TAU, p = Math.acos(2 * Math.random() - 1);
+            return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p), 3, 0.08, 0.08, 2.5];
+        }
+        const arms = 3, frac = i / COUNT;
+        const angle = frac * 15 + (i % arms) * (TAU / arms);
+        const radius = 2 + frac * 38;
+        return [radius*Math.cos(angle), radius*Math.sin(angle), (Math.random()-0.5)*(10*frac), 0.9, 0, 0, 1.0];
+    }
+
+    function getVoid(i) {
+        if (i < COUNT * 0.15) {
+            const a = Math.random() * TAU;
+            return [26*Math.cos(a), 26*Math.sin(a), (Math.random()-0.5)*0.8, 1, 1, 1, 2.8];
+        }
+        const r = 28 + Math.random() * 80, t = Math.random() * TAU, p = Math.acos(2 * Math.random() - 1);
+        return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p), 0.08, 0.55, 1.0, 0.6];
+    }
+
+    function getPurple(i) {
+        if (Math.random() > 0.82) {
+            return [(Math.random()-0.5)*110, (Math.random()-0.5)*110, (Math.random()-0.5)*110, 0.45, 0.45, 0.65, 0.7];
+        }
+        const r = 20, t = Math.random() * TAU, p = Math.acos(2 * Math.random() - 1);
+        return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p), 0.6, 0.4, 1.0, 2.8];
+    }
+
+    function getShrine(i) {
+        if (i < COUNT * 0.3) {
+            return [(Math.random()-0.5)*80, -15, (Math.random()-0.5)*80, 0.35, 0, 0, 0.7];
+        } else if (i < COUNT * 0.4) {
+            const px = ((i%4)<2?1:-1)*12, pz = (i%2==0?1:-1)*8;
+            return [px+(Math.random()-0.5)*2, -15+Math.random()*30, pz+(Math.random()-0.5)*2, 0.18, 0.18, 0.18, 0.5];
+        } else if (i < COUNT * 0.6) {
+            const t = Math.random() * TAU, rad = Math.random() * 30;
+            const curve = Math.pow(rad/30, 2) * 10;
+            return [rad*Math.cos(t), 15-curve+Math.random()*2, rad*Math.sin(t)*0.6, 0.6, 0, 0, 0.55];
+        }
+        return [0, 0, 0, 0, 0, 0, 0];
+    }
+
+    function getNeutral(i) {
+        if (i < COUNT * 0.05) {
+            const r = 14 + Math.random()*18, t = Math.random() * TAU, p = Math.acos(2 * Math.random() - 1);
+            return [r*Math.sin(p)*Math.cos(t), r*Math.sin(p)*Math.sin(t), r*Math.cos(p), 0.08, 0.08, 0.18, 0.35];
+        }
+        return [0, 0, 0, 0, 0, 0, 0];
+    }
+
+    // --- State ---
+    let currentTech = 'neutral';
+    let glowColor = '#00ffff';
+
+    // Pre-cache technique colors for name el
+    const techConfig = {
+        red:     { color: '#ff4444', shadow: 'rgba(255,60,60,0.7)',   label: 'Cursed Technique Reversal: Red',      bloom: 2.5 },
+        void:    { color: '#00ffff', shadow: 'rgba(0,255,255,0.6)',   label: 'Domain Expansion: Infinite Void',     bloom: 2.0 },
+        purple:  { color: '#cc44ff', shadow: 'rgba(180,0,255,0.7)',   label: 'Secret Technique: Hollow Purple',     bloom: 4.0 },
+        shrine:  { color: '#ff2222', shadow: 'rgba(200,0,0,0.8)',     label: 'Domain Expansion: Malevolent Shrine', bloom: 2.5 },
+        neutral: { color: '#00ffff', shadow: 'rgba(0,255,255,0.4)',   label: 'Cursed Energy',                       bloom: 1.0 }
+    };
+
+    function setTargets(tech) {
+        const gen = tech === 'red' ? getRed : tech === 'void' ? getVoid :
+                    tech === 'purple' ? getPurple : tech === 'shrine' ? getShrine : getNeutral;
+        for (let i = 0; i < COUNT; i++) {
+            const v = gen(i);
+            tPos[i*3]=v[0]; tPos[i*3+1]=v[1]; tPos[i*3+2]=v[2];
+            tCol[i*3]=v[3]; tCol[i*3+1]=v[4]; tCol[i*3+2]=v[5];
+            tSiz[i]=v[6];
+        }
+    }
+
+    function updateState(tech) {
+        if (currentTech === tech) return;
+        currentTech = tech;
+        const cfg = techConfig[tech];
+        const nameEl = document.getElementById('technique-name');
+        nameEl.style.color = cfg.color;
+        nameEl.style.textShadow = `0 0 14px ${cfg.shadow}`;
+        nameEl.innerText = cfg.label;
+        bloom.strength = cfg.bloom;
+        glowColor = cfg.color;
+        setTargets(tech);
+    }
+
+    // Set initial neutral particles
+    setTargets('neutral');
+    for (let i = 0; i < COUNT * 3; i++) { pos[i] = tPos[i]; col[i] = tCol[i]; }
+    for (let i = 0; i < COUNT; i++) siz[i] = tSiz[i];
+
+    // --- Hand Tracking ---
+    const videoEl = document.querySelector('.input_video');
+    const canvasEl = document.getElementById('output_canvas');
+    const ctx2d = canvasEl.getContext('2d');
+
+    // --- Stability system: vote buffer + hysteresis ---
+    // Raw detections are noisy. We collect the last N readings and only
+    // switch state when one gesture wins a clear majority.
+    const VOTE_WINDOW = 8;      // frames to look back
+    const VOTE_THRESH = 0.62;   // 62% agreement needed to switch
+    const voteBuffer = [];
+    let lockedTech = 'neutral'; // confirmed stable state
+
+    function classifyGesture(lm) {
+        // Helper: is fingertip above its PIP joint? (lower y = higher on screen)
+        const up = (tip, pip) => lm[tip].y < lm[pip].y;
+
+        // Thumb: compare tip x to IP joint x (works for both hands roughly)
+        const thumbOpen = Math.abs(lm[4].x - lm[2].x) > 0.04;
+
+        // Finger states: index=8/6, middle=12/10, ring=16/14, pinky=20/18
+        const idx = up(8, 6);
+        const mid = up(12, 10);
+        const rng = up(16, 14);
+        const pky = up(20, 18);
+
+        // Pinch: thumb tip close to index tip (normalized distance)
+        const pinchDist = Math.hypot(lm[8].x - lm[4].x, lm[8].y - lm[4].y);
+        const isPinch = pinchDist < 0.055;
+
+        // Fist: all fingers curled
+        const isFist = !idx && !mid && !rng && !pky;
+
+        // All fingers extended flat
+        const isFlat = idx && mid && rng && pky;
+
+        // --- Gesture priority order matters ---
+
+        // Hollow Purple: pinch (thumb + index together), overrides everything
+        if (isPinch) return 'purple';
+
+        // Malevolent Shrine: all 4 fingers up (open hand / prayer)
+        if (isFlat) return 'shrine';
+
+        // Infinite Void: index + middle up, ring + pinky down
+        if (idx && mid && !rng && !pky) return 'void';
+
+        // Red: only index up (pointing), others curled
+        if (idx && !mid && !rng && !pky) return 'red';
+
+        // Fist or ambiguous → neutral
+        return 'neutral';
+    }
+
+    function pushVote(gesture) {
+        voteBuffer.push(gesture);
+        if (voteBuffer.length > VOTE_WINDOW) voteBuffer.shift();
+
+        // Count votes
+        const counts = {};
+        for (const g of voteBuffer) counts[g] = (counts[g] || 0) + 1;
+
+        // Find winner
+        let best = 'neutral', bestCount = 0;
+        for (const [g, c] of Object.entries(counts)) {
+            if (c > bestCount) { bestCount = c; best = g; }
+        }
+
+        // Only switch if winner has enough votes AND it's different from locked state
+        // (hysteresis: require slightly more votes to leave a non-neutral state)
+        const threshold = lockedTech !== 'neutral' ? VOTE_THRESH + 0.1 : VOTE_THRESH;
+        if (best !== lockedTech && bestCount / VOTE_WINDOW >= threshold) {
+            lockedTech = best;
+            updateState(lockedTech);
+        }
+    }
+
+    const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({
+        maxNumHands: 1,           // 1 hand = faster, more stable
+        modelComplexity: 1,
+        minDetectionConfidence: 0.75,
+        minTrackingConfidence: 0.75
+    });
+
+    hands.onResults((results) => {
+        ctx2d.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+        if (results.multiHandLandmarks?.length) {
+            const lm = results.multiHandLandmarks[0];
+
+            // Draw skeleton with current glow color
+            drawConnectors(ctx2d, lm, HAND_CONNECTIONS, { color: glowColor, lineWidth: 4 });
+            drawLandmarks(ctx2d, lm, { color: '#ffffff', lineWidth: 1, radius: 3 });
+
+            pushVote(classifyGesture(lm));
+        } else {
+            // No hand visible — push neutral votes to gradually return to neutral
+            pushVote('neutral');
+        }
+    });
+
+    const camUtils = new Camera(videoEl, {
+        onFrame: async () => {
+            canvasEl.width = videoEl.videoWidth;
+            canvasEl.height = videoEl.videoHeight;
+            await hands.send({ image: videoEl });
+        },
+        width: 640, height: 480
+    });
+    camUtils.start();
+
+    // --- Smooth rotation targets ---
+    let rotZTarget = 0, rotYTarget = 0;
+    let rotZ = 0, rotY = 0;
+    // Screen shake: use a separate offset instead of transforming the whole canvas
+    let shakeX = 0, shakeY = 0;
+
+    // --- Animation ---
+    const LERP = 0.085; // slightly smoother than 0.1
+    const ROT_LERP = 0.06;
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Lerp particles
+        for (let i = 0; i < COUNT * 3; i++) {
+            pos[i] += (tPos[i] - pos[i]) * LERP;
+            col[i] += (tCol[i] - col[i]) * LERP;
+        }
+        for (let i = 0; i < COUNT; i++) siz[i] += (tSiz[i] - siz[i]) * LERP;
+
+        geo.attributes.position.needsUpdate = true;
+        geo.attributes.color.needsUpdate = true;
+        geo.attributes.size.needsUpdate = true;
+
+        // Smooth rotation
+        if (currentTech === 'red') {
+            rotZTarget -= 0.10;
+            rotYTarget = 0;
+        } else if (currentTech === 'purple') {
+            rotZTarget += 0.18;
+            rotYTarget += 0.045;
+        } else if (currentTech === 'shrine') {
+            rotZTarget = 0; rotYTarget = 0;
+        } else {
+            rotYTarget += 0.004;
+            rotZTarget = 0;
+        }
+
+        // Ease rotation toward targets (wrap for red/purple accumulation)
+        rotZ += (rotZTarget - rotZ) * ROT_LERP;
+        rotY += (rotYTarget - rotY) * ROT_LERP;
+        pts.rotation.z = rotZ;
+        pts.rotation.y = rotY;
+
+        // Subtle continuous shake for active techniques (no jarring jumps)
+        if (currentTech !== 'neutral') {
+            const intensity = currentTech === 'purple' ? 8 : 5;
+            const target = currentTech !== 'neutral' ? (Math.random()-0.5)*intensity : 0;
+            shakeX += (target - shakeX) * 0.3;
+            shakeY += (target - shakeY) * 0.3;
+        } else {
+            shakeX *= 0.8; shakeY *= 0.8;
+        }
+        renderer.domElement.style.transform = `translate(${shakeX.toFixed(2)}px, ${shakeY.toFixed(2)}px)`;
+
+        composer.render();
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        cam.aspect = innerWidth / innerHeight;
+        cam.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+        composer.setSize(innerWidth, innerHeight);
+    });
+</script>
+</body>
+</html>
